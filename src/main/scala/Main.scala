@@ -1,12 +1,10 @@
 package com.github.iwag
 
 import java.net.InetSocketAddress
-
 import com.twitter.finagle.builder.ClientBuilder
 import com.twitter.finagle.thrift.ThriftClientFramedCodec
 import com.twitter.server.TwitterServer
-import com.twitter.finagle.Service
-import com.twitter.finagle.Http
+import com.twitter.finagle.{Thrift, Service, Http}
 import com.twitter.finagle.http.HttpMuxer
 import com.twitter.io.Charsets._
 import com.twitter.logging.Logger
@@ -14,6 +12,7 @@ import com.twitter.util.{Time, Future, Await}
 import org.apache.thrift.protocol.TBinaryProtocol
 import org.jboss.netty.buffer.ChannelBuffers._
 import org.jboss.netty.handler.codec.http._
+import org.elasticsearch.thrift._
 
 class HTTPServerImpl(log:Logger) extends Service[HttpRequest, HttpResponse]{
 
@@ -23,6 +22,9 @@ class HTTPServerImpl(log:Logger) extends Service[HttpRequest, HttpResponse]{
     new CacheService.FinagledClient(s, new TBinaryProtocol.Factory())
   }
 
+  private[this] lazy val esClient =
+    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[Rest.FutureIface]("localhost:49090")
+
   override def apply(request: HttpRequest): Future[HttpResponse] = {
     log.info(s"Received at ${Time.now} ${request}")
 
@@ -31,15 +33,13 @@ class HTTPServerImpl(log:Logger) extends Service[HttpRequest, HttpResponse]{
     val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK)
 
     cacheResp.flatMap(
-      res => res.hit match {
-        case Some(value) => {
-          response.setContent(copiedBuffer(value, Utf8))
-          Future.value(response)
+      res => {
+        val s = res.hit match {
+          case Some(value) => value
+          case None => "not found"
         }
-        case None => {
-          response.setContent(copiedBuffer("not found", Utf8))
-          Future.value(response)
-        }
+        response.setContent(copiedBuffer(s, Utf8))
+        Future.value(response)
       }
     )
   }
