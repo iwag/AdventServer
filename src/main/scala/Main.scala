@@ -33,16 +33,17 @@ class HTTPServerImpl(log:Logger, esAddr : InetSocketAddress, cacheAddr: InetSock
 
     val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK)
 
-    cacheResp.flatMap(
-      res => {
-        val s = res.hit match {
-          case Some(value) => value
-          case None => "not found"
-        }
-        response.setContent(copiedBuffer(s, Utf8))
-        Future.value(response)
+    cacheResp.flatMap(res => res.hit match {
+      case Some(v) => Future(v)
+      case _ => {
+        val es = esClient.execute(RestRequest(Method.Post, "/user/item/_search", None, None, Some(ByteBuffer.wrap("test".getBytes))))
+        es map (_.body.get.asCharBuffer().toString)
       }
-    )
+    }).map { str =>
+      val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK)
+      response.setContent(copiedBuffer(str, Utf8))
+      response
+    }
   }
 }
 
