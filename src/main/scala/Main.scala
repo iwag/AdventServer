@@ -1,6 +1,7 @@
 package com.github.iwag
 
 import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 import com.twitter.finagle.builder.ClientBuilder
 import com.twitter.finagle.thrift.ThriftClientFramedCodec
 import com.twitter.server.TwitterServer
@@ -14,16 +15,16 @@ import org.jboss.netty.buffer.ChannelBuffers._
 import org.jboss.netty.handler.codec.http._
 import org.elasticsearch.thrift._
 
-class HTTPServerImpl(log:Logger) extends Service[HttpRequest, HttpResponse]{
+class HTTPServerImpl(log:Logger, esAddr : InetSocketAddress, cacheAddr: InetSocketAddress) extends Service[HttpRequest, HttpResponse]{
 
   private[this] lazy val cacheClient = {
-    val s = ClientBuilder().hosts(new InetSocketAddress("localhost", 49090))
+    val s = ClientBuilder().hosts(cacheAddr)
       .codec(ThriftClientFramedCodec()).hostConnectionLimit(1).build()
     new CacheService.FinagledClient(s, new TBinaryProtocol.Factory())
   }
 
   private[this] lazy val esClient =
-    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[Rest.FutureIface]("localhost:49090")
+    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[Rest.FutureIface](esAddr.toString) // FIXME
 
   override def apply(request: HttpRequest): Future[HttpResponse] = {
     log.info(s"Received at ${Time.now} ${request}")
@@ -46,10 +47,13 @@ class HTTPServerImpl(log:Logger) extends Service[HttpRequest, HttpResponse]{
 }
 
 object HTTPServer extends TwitterServer {
+  val httpAddr = flag("http", new InetSocketAddress(0), "HTTP bind address")
+  val esAddr = flag("es-addr", new InetSocketAddress(0), "Elasticsearch thrift address")
+  val cacheAddr = flag("cache-addr", new InetSocketAddress(0), "Cache thrift address")
 
-  val httpMux = new HttpMuxer().withHandler("/", new HTTPServerImpl(log))
+  val httpMux = new HttpMuxer().withHandler("/", new HTTPServerImpl(log, esAddr(), cacheAddr()))
 
-  val httpServer = Http.serve(":48080", httpMux)
+  val httpServer = Http.serve(httpAddr(), httpMux)
 
   def main() {
 
