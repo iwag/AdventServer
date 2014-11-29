@@ -1,6 +1,7 @@
 package com.github.iwag
 
 import java.net.InetSocketAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 import com.twitter.server.TwitterServer
@@ -40,9 +41,9 @@ class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
 
 class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
 
-  val index = new AtomicInteger(0)
+  private[this] val index = new AtomicInteger(0)
 
-  val table = new mutable.HashMap[String, mutable.Set[Int]] with mutable.MultiMap[String, Int]
+  private[this] val table = new mutable.HashMap[String, mutable.Set[Int]] with mutable.MultiMap[String, Int]
 
   def calcBigram(s: String): Set[String] = {
     if (s.length < 2) Set()
@@ -70,6 +71,23 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
     log.info(s"delete ${id}")
     table foreach { kv => if (kv._2.contains(id)) kv._2.remove(id)}
   }
+}
+
+class StoreServiceImpl(log:Logger) extends StoreService.FutureIface {
+  private[this] val table = new mutable.HashMap[Int,String] with mutable.SynchronizedMap[Int, String]
+
+  override def get(key: Int): Future[String] = Future.value{
+    table.get(key) match {
+      case None => throw new BaseException("not found")
+      case Some(v) => v
+    }
+  }
+
+  override def put(id: Int, value: String): Future[Unit] = Future.value{
+    table(id) = value
+  }
+
+  override def delete(id: Int): Future[Unit] = ???
 }
 
 trait ThriftServer extends TwitterServer {
@@ -105,3 +123,12 @@ object CacheServer extends TwitterServer with ThriftServer {
     start(service)
   }
 }
+
+object StoreServer extends TwitterServer with ThriftServer {
+  def main() = {
+    val service = new StoreService.FinagledService(new StoreServiceImpl(log), new TBinaryProtocol.Factory())
+
+    start(service)
+  }
+}
+

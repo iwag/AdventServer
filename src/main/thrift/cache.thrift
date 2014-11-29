@@ -31,7 +31,7 @@ service SearchService {
 service StoreService {
   string get(1: i32 key)
 
-  i32 put(1: i32 id, 2: string value)
+  void put(1: i32 id, 2: string value)
 
   void delete(1: i32 id) throws (1: BaseException exp)
 }

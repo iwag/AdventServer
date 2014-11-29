@@ -43,7 +43,7 @@ class SearchSpec extends FlatSpec with Matchers with BeforeAndAfter {
   }
 }
 
-class CacheSpec extends FlatSpec with Matchers with BeforeAndAfter {
+class CacheSpec extends FlatSpec with Matchers {
   val log = LoggerFactory("log")()
 
   var cacheImpl =  new CacheServerImpl(log)
@@ -57,5 +57,24 @@ class CacheSpec extends FlatSpec with Matchers with BeforeAndAfter {
     cacheImpl.get("aaa").get.hit should be equals Some("bbb")
     Await.all(cacheImpl.put("aaa", "ccc")) // updating
     cacheImpl.get("aaa").get.hit should be equals Some("ccc")
+  }
+}
+
+class StoreSpec extends FlatSpec with Matchers {
+  val log = LoggerFactory("log")()
+
+  var storeImpl =  new StoreServiceImpl(log)
+
+  "search" should "not found" in {
+    the [BaseException] thrownBy {
+      storeImpl.get(1).get
+    }
+  }
+
+  "search" should "put and get" in {
+    Await.all(storeImpl.put(2, "bbb"))
+    storeImpl.get(2).get should be equals Some("bbb")
+    Await.all(storeImpl.put(2, "ccc")) // updating
+    storeImpl.get(2).get should be equals Some("ccc")
   }
 }
