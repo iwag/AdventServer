@@ -2,7 +2,7 @@ package com.github.iwag
 
 import org.scalatest._
 import com.twitter.logging._
-
+import com.twitter.util.Await
 
 class SearchSpec extends FlatSpec with Matchers with BeforeAndAfter {
   val log = LoggerFactory("log")()
@@ -40,5 +40,22 @@ class SearchSpec extends FlatSpec with Matchers with BeforeAndAfter {
     searchImpl.delete(j)
     searchImpl.search("わい").get.hits should not contain (j)
     searchImpl.search("わい").get.hits should not contain (j)
+  }
+}
+
+class CacheSpec extends FlatSpec with Matchers with BeforeAndAfter {
+  val log = LoggerFactory("log")()
+
+  var cacheImpl =  new CacheServerImpl(log)
+
+  "search" should "not found" in {
+    cacheImpl.get("xxxxxx").get.hit should be equals None
+  }
+
+  "search" should "put and get" in {
+    Await.all(cacheImpl.put("aaa", "bbb"))
+    cacheImpl.get("aaa").get.hit should be equals Some("bbb")
+    Await.all(cacheImpl.put("aaa", "ccc")) // updating
+    cacheImpl.get("aaa").get.hit should be equals Some("ccc")
   }
 }
