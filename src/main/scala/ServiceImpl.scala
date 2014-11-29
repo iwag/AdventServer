@@ -61,10 +61,16 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
   override def search(key: String): Future[SearchResponse] = Future.value{
     val bigramed = calcBigram(key)
     val foundIdxs = bigramed flatMap (table.get(_))
-    val all = foundIdxs reduceLeft (_ & _)
+    val all = foundIdxs reduceLeftOption  (_ & _)
 
     log.info(s"hit ${all} by ${key}")
-    SearchResponse(all.toSeq, "OK")
+
+    all match {
+      case Some(_) =>
+        SearchResponse(all.get.toSeq, "OK")
+      case None =>
+        SearchResponse(Seq(), "NOT_FOUND")
+    }
   }
 
   override def delete(id: Int):Future[Unit] = Future.value {

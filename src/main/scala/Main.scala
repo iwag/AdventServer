@@ -2,7 +2,7 @@ package com.github.iwag
 
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
-import com.twitter.finagle.builder.ClientBuilder
+import com.twitter.finagle.Filter
 import com.twitter.finagle.filter.LogFormatter
 import com.twitter.finagle.filter.LoggingFilter
 import com.twitter.finagle.service.{RetryPolicy, RetryingFilter}
@@ -19,54 +19,62 @@ import org.jboss.netty.buffer.ChannelBuffers._
 import org.jboss.netty.handler.codec.http._
 import org.elasticsearch.thrift._
 
-class CacheFilter(cacheAddr: InetSocketAddress) extends SimpleFilter[HttpRequest, HttpResponse] {
-  private[this] lazy val cacheClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[CacheService.FutureIface](cacheAddr.toString) // FIXME
-
+class CacheFilter(cacheService: CacheService.FutureIface) extends SimpleFilter[HttpRequest, HttpResponse] {
   override def apply(request: HttpRequest, service: Service[HttpRequest, HttpResponse]): Future[HttpResponse] = {
-    cacheClient.get(request.getUri) flatMap {
+    cacheService.get(request.getUri) flatMap {
       _.hit match {
         case Some(v) => {
-          val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK)
+          val response = new DefaultHttpResponse(request.getProtocolVersion, HttpResponseStatus.OK)
           response.setContent(copiedBuffer(v, Utf8))
           Future(response)
         }
-        case _ => service(request)
+        case _ => {
+          val fv = service(request)
+          fv map { res =>
+            res.getStatus match {
+              case HttpResponseStatus.OK =>
+                cacheService.put(request.getUri, res.getContent.toString(Utf8))
+                res
+              case _ => res
+            }
+          }
+        }
       }
     }
   }
 }
 
-class ESService(log:Logger, esAddr: InetSocketAddress) extends Service[HttpRequest, HttpResponse] {
+class SearchFilter(log:Logger, searchService: SearchService.FutureIface) extends  Filter[HttpRequest, HttpResponse, List[Int], List[String]] {
+  override def apply(request: HttpRequest, service: Service[List[Int], List[String]]): Future[HttpResponse] = {
+    log.info(request.toString + " " + request.getUri)
 
-  private[this] lazy val esClient =
-    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[Rest.FutureIface]("localhost:59090") // FIXME
-
-  override def apply(request: HttpRequest): Future[HttpResponse] = {
-    log.info(request.toString)
-
-    val es = esClient.execute(RestRequest(Method.Get, "/java_river/status/_search?q=text:java", None, None, None))// Some(request.getContent.toByteBuffer)))
-    es map { res =>
-      log.info(res.toString)
-
-      val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK)
-      response.setContent(copiedBuffer(res.body.get))
+    val decoded = java.net.URLDecoder.decode(request.getUri, "UTF-8")
+    val keyword = decoded.split("/")(1)
+    val flist = searchService.search(keyword) flatMap { res =>
+      log.info(keyword + " " + res.toString)
+      service(res.hits.toList)
+    }
+    flist map { l =>
+      val response = new DefaultHttpResponse(request.getProtocolVersion, HttpResponseStatus.OK)
+      val str = l match {
+        case List() => response.setStatus(HttpResponseStatus.NOT_FOUND); "NOT_FOUND"
+        case list => list.mkString (" ")
+      }
+      response.setContent (copiedBuffer(str, Utf8) )
       response
     }
   }
 }
 
-class HTTPServerImpl(log: Logger, esAddr: InetSocketAddress, cacheAddr: InetSocketAddress) extends Service[HttpRequest, HttpResponse] {
+class StoreGetService(log:Logger, storeService: StoreService.FutureIface) extends Service[List[Int], List[String]] {
+  override def apply(request: List[Int]): Future[List[String]] = {
+    val list :List[Future[String]] = request.map (storeService.get(_))
+    Future.collect(list) map (_.toList)
+  }
+}
 
-  val cacheFilter = new CacheFilter(cacheAddr)
-  val esService = new ESService(log, esAddr)
-
-
-  val compositeService = /*cacheFilter andThen*/ esService
-
-  def post(request :HttpRequest): Future[HttpResponse] = {
-    val dbClient =    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[DbService.FutureIface]("localhost:59090") // FIXME
-    val searchClient =
-      Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[SearchService.FutureIface]("localhost:59090") // FIXME
+class PostService(searchClient: SearchService.FutureIface, dbClient: StoreService.FutureIface) extends Service[HttpRequest, HttpResponse] {
+  override def apply(request: HttpRequest): Future[HttpResponse] = {
     val body = request.getContent.toString(Utf8)
     val stored = searchClient.put(body) flatMap {
       dbClient.put(_, body)
@@ -77,10 +85,24 @@ class HTTPServerImpl(log: Logger, esAddr: InetSocketAddress, cacheAddr: InetSock
       response
     }
   }
+}
+
+class HTTPServerImpl(log: Logger, esAddr: InetSocketAddress, cacheAddr: InetSocketAddress, dbAddr: InetSocketAddress) extends Service[HttpRequest, HttpResponse] {
+//  private[this] lazy val cacheClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[CacheService.FutureIface]("localhost:49091")
+  private[this] lazy val dbClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[StoreService.FutureIface]("localhost:49091")
+  private[this] lazy val searchClient =
+    Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[SearchService.FutureIface]("localhost:49092")
+
+//  val cacheFilter = new CacheFilter()
+  val searchFilter = new SearchFilter(log, searchClient)
+  val dbService = new StoreGetService(log, dbClient)
+
+  val post = new PostService(searchClient, dbClient)
+  val get = searchFilter andThen dbService
 
   override def apply(request: HttpRequest): Future[HttpResponse] = {
     request.getMethod match {
-      case HttpMethod.GET => compositeService(request)
+      case HttpMethod.GET => get(request)
       case HttpMethod.POST => post(request)
     }
   }
@@ -91,9 +113,10 @@ object HTTPServer extends TwitterServer {
   val httpAddr = flag("http", new InetSocketAddress(48080), "HTTP bind address")
   val esAddr = flag("es-addr", new InetSocketAddress(0), "Elasticsearch thrift address")
   val cacheAddr = flag("cache-addr", new InetSocketAddress(0), "Cache thrift address")
+  val dbAddr = flag("db-addr", new InetSocketAddress(0), "Cache thrift address")
 
   def main() {
-    val httpMux = new HttpMuxer().withHandler("/", new HTTPServerImpl(log, esAddr(), cacheAddr()))
+    val httpMux = new HttpMuxer().withHandler("/", new HTTPServerImpl(log, esAddr(), cacheAddr(), dbAddr()))
 
     val httpServer = Http.serve(httpAddr(), httpMux)
 

@@ -24,6 +24,8 @@ class SearchSpec extends FlatSpec with Matchers with BeforeAndAfter {
   }
 
   "search" should "put" in {
+    searchImpl.search("わい").get.hits.isEmpty should be equals true
+
     val i = searchImpl.put("わいわい").get
     searchImpl.search("わい").get.hits should contain (i)
     searchImpl.search("わいわい").get.hits should contain (i)
