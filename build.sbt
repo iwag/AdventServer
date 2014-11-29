@@ -7,7 +7,8 @@ name := "adventservice"
 com.twitter.scrooge.ScroogeSBT.newSettings
 
 libraryDependencies ++= Seq(
-  "com.twitter"    %% "twitter-server"        % "1.8.0"
+  "com.twitter"    %% "twitter-server"        % "1.8.0",
+  "org.scalatest"  %  "scalatest_2.10"        % "2.2.1" % "test"
 )
 
 
