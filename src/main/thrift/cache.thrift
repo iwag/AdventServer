@@ -10,3 +10,28 @@ service CacheService {
 
   void put(1: string key, 2: string value)
 }
+
+struct SearchResponse {
+1:    list<i32> hits
+2:    string msg
+}
+
+exception BaseException {
+1: string message
+}
+
+service SearchService {
+  SearchResponse search(1: string key)
+
+  i32 put(1: string value)
+
+  void delete(1: i32 id) throws (1: BaseException exp)
+}
+
+service StoreService {
+  string get(1: i32 key)
+
+  i32 put(1: i32 id, 2: string value)
+
+  void delete(1: i32 id) throws (1: BaseException exp)
+}
