@@ -4,8 +4,9 @@ import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+import com.github.iwag.CacheService.FinagledService
 import com.twitter.server.TwitterServer
-import com.twitter.finagle.{Service, Thrift}
+import com.twitter.finagle.{ListeningServer, Service, Thrift}
 import com.twitter.util.{Future, Await}
 import com.twitter.logging.Logger
 import org.apache.thrift.protocol.TBinaryProtocol
@@ -14,7 +15,7 @@ import scala.collection.mutable
 
 class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
   val ExpireSeconds = 5L
-  val table = scala.collection.mutable.HashMap[String,(String,Long)]()
+  val table = new mutable.HashMap[String,(String,Long)] with mutable.SynchronizedMap[String, (String, Long)]
 
   override def get(key: String): Future[CacheResponse] =
     table.get(key) match {
@@ -24,10 +25,11 @@ class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
       }
       case Some(v) if v._2 < System.currentTimeMillis() => {
         log.info(s"expire time ${key}")
+        table.remove(key)
         Future(CacheResponse(None,"expired"))
       }
       case Some(value) => {
-        log.info(s"hit ${key} ${value}")
+        log.info(s"hit ${key} ${value._1}")
         Future(CacheResponse(Some(value._1), "found"))
       }
     }
@@ -41,9 +43,9 @@ class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
 
 class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
 
-  private[this] val index = new AtomicInteger(0)
+  private[this] val indexGenerator = new AtomicInteger(0)
 
-  private[this] val table = new mutable.HashMap[String, mutable.Set[Int]] with mutable.MultiMap[String, Int]
+  private[this] val reversedIndex = new mutable.HashMap[String, mutable.Set[Int]] with mutable.MultiMap[String, Int] with mutable.SynchronizedMap[String, mutable.Set[Int]]
 
   def calcBigram(s: String): Set[String] = {
     if (s.length < 2) Set()
@@ -51,8 +53,8 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
   }
 
   override def put(value: String): Future[Int] = Future.value {
-    val idx = index.incrementAndGet()
-    calcBigram(value) foreach (s => table.getOrElseUpdate(s, mutable.Set[Int]()) += idx)
+    val idx = indexGenerator.incrementAndGet()
+    calcBigram(value) foreach (s => reversedIndex.getOrElseUpdate(s, mutable.Set[Int]()) += idx)
 
     log.info(s"put ${value} as ${idx}")
     idx
@@ -60,7 +62,7 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
 
   override def search(key: String): Future[Seq[Int]] = Future.value{
     val bigramed = calcBigram(key)
-    val foundIdxs = bigramed flatMap (table.get(_))
+    val foundIdxs = bigramed flatMap (reversedIndex.get(_))
     val all = foundIdxs reduceLeftOption  (_ & _)
 
     log.info(s"found ${all} by ${key}")
@@ -70,7 +72,7 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
 
   override def delete(id: Int):Future[Unit] = Future.value {
     log.info(s"delete ${id}")
-    table foreach { kv => if (kv._2.contains(id)) kv._2.remove(id)}
+    reversedIndex foreach { kv => if (kv._2.contains(id)) kv._2.remove(id)}
   }
 }
 
@@ -94,10 +96,7 @@ class StoreServiceImpl(log:Logger) extends StoreService.FutureIface {
 trait ThriftServer extends TwitterServer {
   val thriftAddr = flag("bind", new InetSocketAddress(9090), "bind address")
 
-  def start( service: Service[Array[Byte], Array[Byte]]
-             ) {
-    val server = Thrift.server.serve(thriftAddr(), service)
-
+  def start(server: ListeningServer) {
     onExit {
       adminHttpServer.close()
       server.close()
@@ -107,29 +106,27 @@ trait ThriftServer extends TwitterServer {
     log.info("start thrift:" + server.boundAddress)
     Await.all(adminHttpServer, server)
   }
+
 }
 
 object SearchServer extends TwitterServer with ThriftServer {
   def main() = {
-    val service = new SearchService.FinagledService(new SearchServerImpl(log), new TBinaryProtocol.Factory())
-
-    start(service)
+    val server = Thrift.serveIface(thriftAddr(), new SearchServerImpl(log))
+    start(server)
   }
 }
 
 object CacheServer extends TwitterServer with ThriftServer {
   def main() = {
-    val service = new CacheService.FinagledService(new CacheServerImpl(log), new TBinaryProtocol.Factory())
-
-    start(service)
+    val server = Thrift.serveIface(thriftAddr(), new CacheServerImpl(log))
+    start(server)
   }
 }
 
 object StoreServer extends TwitterServer with ThriftServer {
   def main() = {
-    val service = new StoreService.FinagledService(new StoreServiceImpl(log), new TBinaryProtocol.Factory())
-
-    start(service)
+    val server = Thrift.serveIface(thriftAddr(), new StoreServiceImpl(log))
+    start(server)
   }
 }
 
