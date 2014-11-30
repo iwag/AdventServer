@@ -13,7 +13,7 @@ import org.apache.thrift.protocol.TBinaryProtocol
 import scala.collection.mutable
 
 class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
-  val ExpireSeconds = 10
+  val ExpireSeconds = 5L
   val table = scala.collection.mutable.HashMap[String,(String,Long)]()
 
   override def get(key: String): Future[CacheResponse] =
@@ -22,19 +22,19 @@ class CacheServerImpl(log:Logger) extends CacheService.FutureIface {
         log.info(s"not found ${key}")
         Future(CacheResponse(None,"not found"))
       }
-      case Some(v) if v._2 > System.currentTimeMillis() => {
+      case Some(v) if v._2 < System.currentTimeMillis() => {
         log.info(s"expire time ${key}")
         Future(CacheResponse(None,"expired"))
       }
       case Some(value) => {
-        log.info(s"found ${key}")
+        log.info(s"hit ${key} ${value}")
         Future(CacheResponse(Some(value._1), "found"))
       }
     }
 
   override def put(key: String, value: String): Future[Unit] = Future.value{
+    val ttl = System.currentTimeMillis() + ExpireSeconds * 1000L
     log.info(s"updating ${key}:${value}")
-    val ttl = System.currentTimeMillis() + ExpireSeconds * 1000
     table(key) = (value, ttl)
   }
 }
@@ -58,19 +58,14 @@ class SearchServerImpl(log:Logger) extends SearchService.FutureIface {
     idx
   }
 
-  override def search(key: String): Future[SearchResponse] = Future.value{
+  override def search(key: String): Future[Seq[Int]] = Future.value{
     val bigramed = calcBigram(key)
     val foundIdxs = bigramed flatMap (table.get(_))
     val all = foundIdxs reduceLeftOption  (_ & _)
 
-    log.info(s"hit ${all} by ${key}")
+    log.info(s"found ${all} by ${key}")
 
-    all match {
-      case Some(_) =>
-        SearchResponse(all.get.toSeq, "OK")
-      case None =>
-        SearchResponse(Seq(), "NOT_FOUND")
-    }
+    all.getOrElse(Set[Int]()).toSeq
   }
 
   override def delete(id: Int):Future[Unit] = Future.value {

@@ -29,13 +29,9 @@ class CacheFilter(cacheService: CacheService.FutureIface) extends SimpleFilter[H
           Future(response)
         }
         case _ => {
-          val fv = service(request)
-          fv map { res =>
-            res.getStatus match {
-              case HttpResponseStatus.OK =>
-                cacheService.put(request.getUri, res.getContent.toString(Utf8))
-                res
-              case _ => res
+          service(request) flatMap { res =>
+            cacheService.put(request.getUri, res.getContent.toString(Utf8)) map { i =>
+              res
             }
           }
         }
@@ -52,15 +48,15 @@ class SearchFilter(log:Logger, searchService: SearchService.FutureIface) extends
     val keyword = decoded.split("/")(1)
     val flist = searchService.search(keyword) flatMap { res =>
       log.info(keyword + " " + res.toString)
-      service(res.hits.toList)
+      service(res.toList)
     }
     flist map { l =>
       val response = new DefaultHttpResponse(request.getProtocolVersion, HttpResponseStatus.OK)
       val str = l match {
-        case List() => response.setStatus(HttpResponseStatus.NOT_FOUND); "NOT_FOUND"
-        case list => list.mkString (" ")
+        case List() => response.setStatus(HttpResponseStatus.NOT_FOUND); ""
+        case list => list.mkString (",")
       }
-      response.setContent (copiedBuffer(str, Utf8) )
+      response.setContent (copiedBuffer(s"[${str}]", Utf8) )
       response
     }
   }
@@ -88,17 +84,17 @@ class PostService(searchClient: SearchService.FutureIface, dbClient: StoreServic
 }
 
 class HTTPServerImpl(log: Logger, esAddr: InetSocketAddress, cacheAddr: InetSocketAddress, dbAddr: InetSocketAddress) extends Service[HttpRequest, HttpResponse] {
-//  private[this] lazy val cacheClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[CacheService.FutureIface]("localhost:49091")
+  private[this] lazy val cacheClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[CacheService.FutureIface]("localhost:49093")
   private[this] lazy val dbClient = Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[StoreService.FutureIface]("localhost:49091")
   private[this] lazy val searchClient =
     Thrift.client.withProtocolFactory(new TBinaryProtocol.Factory()).newIface[SearchService.FutureIface]("localhost:49092")
 
-//  val cacheFilter = new CacheFilter()
+  val cacheFilter = new CacheFilter(cacheClient)
   val searchFilter = new SearchFilter(log, searchClient)
   val dbService = new StoreGetService(log, dbClient)
 
   val post = new PostService(searchClient, dbClient)
-  val get = searchFilter andThen dbService
+  val get = cacheFilter andThen searchFilter andThen dbService
 
   override def apply(request: HttpRequest): Future[HttpResponse] = {
     request.getMethod match {

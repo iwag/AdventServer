@@ -24,24 +24,24 @@ class SearchSpec extends FlatSpec with Matchers with BeforeAndAfter {
   }
 
   "search" should "put" in {
-    searchImpl.search("わい").get.hits.isEmpty should be equals true
+    searchImpl.search("わい").get.isEmpty should be equals true
 
     val i = searchImpl.put("わいわい").get
-    searchImpl.search("わい").get.hits should contain (i)
-    searchImpl.search("わいわい").get.hits should contain (i)
+    searchImpl.search("わい").get should contain (i)
+    searchImpl.search("わいわい").get should contain (i)
 
     val j = searchImpl.put("こんにちわい").get
-    searchImpl.search("こんにちわ").get.hits should contain (j)
-    searchImpl.search("わい").get.hits should contain (i)
-    searchImpl.search("わい").get.hits should contain (j)
+    searchImpl.search("こんにちわ").get should contain (j)
+    searchImpl.search("わい").get should contain (i)
+    searchImpl.search("わい").get should contain (j)
 
     searchImpl.delete(i)
-    searchImpl.search("わい").get.hits should not contain (i)
-    searchImpl.search("わい").get.hits should contain (j)
+    searchImpl.search("わい").get should not contain (i)
+    searchImpl.search("わい").get should contain (j)
 
     searchImpl.delete(j)
-    searchImpl.search("わい").get.hits should not contain (j)
-    searchImpl.search("わい").get.hits should not contain (j)
+    searchImpl.search("わい").get should not contain (j)
+    searchImpl.search("わい").get should not contain (j)
   }
 }
 
